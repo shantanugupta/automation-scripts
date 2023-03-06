@@ -1,0 +1,190 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "storageAccountName": {
+            "type": "string",
+            "defaultValue": "learneastus2hdistore"
+        },
+        "containerName": {
+            "type": "string",
+            "defaultValue": "wasbcontainer"
+        },
+        "clusterName": {
+            "type": "string",
+            "defaultValue": "hdi",
+            "metadata": {
+                "description": "The name of the HDInsight cluster to create."
+            }
+        },
+        "clusterVersion": {
+            "type": "string",
+            "defaultValue": "4.0",
+            "metadata": {
+                "description": "HDInsight cluster version."
+            }
+        },
+        "clusterWorkerNodeCount": {
+            "type": "int",
+            "defaultValue": 2,
+            "metadata": {
+                "description": "The number of nodes in the HDInsight cluster."
+            }
+        },
+        "clusterKind": {
+            "type": "string",
+            "defaultValue": "SPARK",
+            "metadata": {
+                "description": "The type of the HDInsight cluster to create."
+            }
+        },
+        "ambariSQLServer": {
+            "type": "string",
+            "defaultValue": "ambari",
+            "metadata": {
+                "description": "These credentials can be used to remotely access ambari db."
+            }
+        },
+        "minTlsVersionNumber": {
+            "type": "string",
+            "defaultValue": "1.2"
+        },
+        "ambariSQLDatabase": {
+            "type": "string",
+            "defaultValue": "ambaridb"
+        },
+        "clusterLoginUserName": {
+            "type": "securestring",
+            "metadata": {
+                "description": "These credentials can be used to submit jobs to the cluster and to log into cluster dashboards."
+            }
+        },
+        "clusterLoginPassword": {
+            "type": "securestring",
+            "metadata": {
+                "description": "The password must be at least 10 characters in length and must contain at least one digit, one non-alphanumeric character, and one upper or lower case letter."
+            }
+        },
+        "sshUserName": {
+            "type": "securestring",
+            "metadata": {
+                "description": "These credentials can be used to remotely access the cluster."
+            }
+        },
+        "sshPassword": {
+            "type": "securestring",
+            "metadata": {
+                "description": "The password must be at least 10 characters in length and must contain at least one digit, one non-alphanumeric character, and one upper or lower case letter."
+            }
+        },        
+        "ambariUserName": {
+            "type": "securestring",
+            "metadata": {
+                "description": "These credentials can be used to remotely access ambari db."
+            }
+        },
+        "ambariPassword": {
+            "type": "securestring",
+            "metadata": {
+                "description": "The password must be at least 8 characters in length and must contain at least one digit, one non-alphanumeric character, one upper case letter and one lower case letter. Also, the password should not contain 3 consecutive letters from the username"
+            }
+        }
+    },
+    "variables": {
+        "rgName": "sparkplayground",
+        "clusterNameVar": "[concat(variables('rgName'), resourceGroup().location,parameters('clusterName'))]",
+        "ambariSQLServerVar": "[concat(variables('rgName'), resourceGroup().location, parameters('ambariSQLServer'))]",
+        "ambariSQLDatabaseVar": "[concat(variables('rgName'), resourceGroup().location, parameters('ambariSQLDatabase'))]",
+        "vnetNameVar": "[concat(variables('clusterNameVar'), 'vnet')]"
+    },
+    "resources": [
+        {
+            "apiVersion": "2018-06-01-preview",
+            "name": "[variables('clusterNameVar')]",
+            "type": "Microsoft.HDInsight/clusters",
+            "location": "[resourceGroup().location]",
+            "properties": {
+                "clusterVersion": "[parameters('clusterVersion')]",
+                "osType": "Linux",
+                "tier": "standard",
+                "clusterDefinition": {
+                    "kind": "[parameters('clusterKind')]",
+                    "componentVersion": {
+                        "Spark": "2.4"
+                    },
+                    "configurations": {
+                        "gateway": {
+                            "restAuthCredential.isEnabled": true,
+                            "restAuthCredential.username": "[parameters('clusterLoginUserName')]",
+                            "restAuthCredential.password": "[parameters('clusterLoginPassword')]"
+                        },
+                        "ambari-conf": {
+                            "database-server": "[format('{0}.database.windows.net', variables('ambariSQLServerVar'))]",
+                            "database-name": "[variables('ambariSQLDatabaseVar')]",
+                            "database-user-name": "[parameters('ambariUserName')]",
+                            "database-user-password": "[parameters('ambariPassword')]"
+                        }
+                    }
+                },
+                "storageProfile": {
+                    "storageaccounts": [
+                        {
+                            "name": "[format('{0}.blob.core.windows.net',parameters('storageAccountName'))]",
+                            "isDefault": true,
+                            "container": "[parameters('containerName')]",
+                            "key": "[listKeys(resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName')  ), '2019-06-01').keys[0].value]"
+                        }
+                    ]
+                },
+                "computeProfile": {
+                    "roles": [
+                        {
+                            "autoscale": null,
+                            "name": "headnode",
+                            "minInstanceCount": 1,
+                            "targetInstanceCount": 1,
+                            "hardwareProfile": {
+                                "vmSize": "Standard_A1_v2"
+                            },
+                            "osProfile": {
+                                "linuxOperatingSystemProfile": {
+                                    "username": "[parameters('sshUserName')]",
+                                    "password": "[parameters('sshPassword')]"
+                                },
+                                "windowsOperatingSystemProfile": null
+                            },
+                            "virtualNetworkProfile": {
+                                "id": "[resourceId('Microsoft.Network/virtualNetworks', variables('vnetNameVar'))]",
+                                "subnet": "[format('{0}/subnets/hdinsight', resourceId('Microsoft.Network/virtualNetworks', variables('vnetNameVar')))]"
+                            },
+                            "scriptActions": [],
+                            "dataDisksGroups": null
+                        },
+                        {
+                            "autoscale": null,
+                            "name": "workernode",
+                            "targetInstanceCount": "[parameters('clusterWorkerNodeCount')]",
+                            "hardwareProfile": {
+                                "vmSize": "Standard_A1_v2"
+                            },
+                            "osProfile": {
+                                "linuxOperatingSystemProfile": {
+                                    "username": "[parameters('sshUserName')]",
+                                    "password": "[parameters('sshPassword')]"
+                                },
+                                "windowsOperatingSystemProfile": null
+                            },
+                            "virtualNetworkProfile": {
+                                "id": "[resourceId('Microsoft.Network/virtualNetworks', variables('vnetNameVar'))]",
+                                "subnet": "[format('{0}/subnets/hdinsight', resourceId('Microsoft.Network/virtualNetworks', variables('vnetNameVar')))]"
+                            },
+                            "scriptActions": [],
+                            "dataDisksGroups": null
+                        }
+                    ]
+                },
+                "minSupportedTlsVersion": "[parameters('minTlsVersionNumber')]"
+            }
+        }
+    ]
+}

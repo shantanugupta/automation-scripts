@@ -1,0 +1,541 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "storageAccountName": {
+            "type": "string",
+            "defaultValue": "learneastus2hdistore"
+        },
+        "containerName": {
+            "type": "string",
+            "defaultValue": "wasbcontainer"
+        },
+        "clusterName": {
+            "type": "string",
+            "defaultValue": "hdi",
+            "metadata": {
+                "description": "The name of the HDInsight cluster to create."
+            }
+        },
+        "clusterVersion": {
+            "type": "string",
+            "defaultValue": "4.0",
+            "metadata": {
+                "description": "HDInsight cluster version."
+            }
+        },
+        "clusterWorkerNodeCount": {
+            "type": "int",
+            "defaultValue": 2,
+            "metadata": {
+                "description": "The number of nodes in the HDInsight cluster."
+            }
+        },
+        "clusterKind": {
+            "type": "string",
+            "defaultValue": "SPARK",
+            "metadata": {
+                "description": "The type of the HDInsight cluster to create."
+            }
+        },
+        "clusterLoginUserName": {
+            "type": "securestring",
+            "metadata": {
+                "description": "These credentials can be used to submit jobs to the cluster and to log into cluster dashboards."
+            }
+        },
+        "clusterLoginPassword": {
+            "type": "securestring",
+            "metadata": {
+                "description": "The password must be at least 10 characters in length and must contain at least one digit, one non-alphanumeric character, and one upper or lower case letter."
+            }
+        },
+        "sshUserName": {
+            "type": "securestring",
+            "metadata": {
+                "description": "These credentials can be used to remotely access the cluster."
+            }
+        },
+        "sshPassword": {
+            "type": "securestring",
+            "metadata": {
+                "description": "The password must be at least 10 characters in length and must contain at least one digit, one non-alphanumeric character, and one upper or lower case letter."
+            }
+        },        
+        "ambariUserName": {
+            "type": "securestring",
+            "metadata": {
+                "description": "These credentials can be used to remotely access ambari db."
+            }
+        },
+        "ambariPassword": {
+            "type": "securestring",
+            "metadata": {
+                "description": "The password must be at least 8 characters in length and must contain at least one digit, one non-alphanumeric character, one upper case letter and one lower case letter. Also, the password should not contain 3 consecutive letters from the username"
+            }
+        },
+        "ambariSQLServer": {
+            "type": "string",
+            "defaultValue": "ambari",
+            "metadata": {
+                "description": "These credentials can be used to remotely access ambari db."
+            }
+        },        
+        "minTlsVersionNumber": {
+            "type": "string",
+            "defaultValue": "1.2"
+        },
+        "ambariSQLDatabase": {
+            "type": "string",
+            "defaultValue": "ambaridb"
+        },
+		"networkSecurityGroupName":{
+			"type": "string",
+            "defaultValue": "sparklearning-nsg"
+		},
+        "vault": {
+            "type": "string",
+            "defaultValue": "dev",
+            "metadata": {
+                "description": "The vault name specific for storing all credentials."
+            }
+        }
+    },
+    "variables": {
+        "rgName": "sparkplayground",
+        "clusterNameVar": "[concat(variables('rgName'), resourceGroup().location,parameters('clusterName'))]",
+        "vaultVar": "[concat(variables('rgName'), resourceGroup().location,parameters('vault'))]",
+        "ambariSQLServerVar": "[concat(variables('rgName'), resourceGroup().location, parameters('ambariSQLServer'))]",
+        "ambariSQLDatabaseVar": "[concat(variables('rgName'), resourceGroup().location, parameters('ambariSQLDatabase'))]",
+        "vnetNameVar": "[concat(variables('clusterNameVar'), 'vnet')]",		
+        "secretNameValueMapVar": [
+            {
+                "secretName": "hdiadminuser",
+                "secretValue": "[parameters('clusterLoginUserName')]",
+                "description": "cluster admin user"
+            },
+            {
+                "secretName": "hdiadminpassword",
+                "secretValue": "[parameters('clusterLoginPassword')]",
+                "description": "cluster admin password"
+            },
+            {
+                "secretName": "sshadminuser",
+                "secretValue": "[parameters('sshUserName')]",
+                "description": "ssh admin user"
+            },
+            {
+                "secretName": "sshadminpassword",
+                "secretValue": "[parameters('sshPassword')]",
+                "description": "ssh admin password"
+            },
+            {
+                "secretName": "ambariadminuser",
+                "secretValue": "[parameters('ambariUserName')]",
+                "description": "ambari admin user"
+            },
+            {
+                "secretName": "ambariadminpassword",
+                "secretValue": "[parameters('ambariPassword')]",
+                "description": "ambari admin password"
+            }
+        ]
+    },
+    "resources": [
+        {
+            "apiVersion": "2021-10-01",
+            "name": "[variables('vaultVar')]",
+            "location": "[resourceGroup().location]",
+            "type": "Microsoft.KeyVault/vaults",
+            "properties": {
+                "enabledForDeployment": true,
+                "enabledForTemplateDeployment": true,
+                "enabledForDiskEncryption": true,
+                "enableRbacAuthorization": true,
+                "tenantId": "[subscription().tenantId]",
+                "sku": {
+                    "name": "standard",
+                    "family": "A"
+                },
+                "publicNetworkAccess": "Enabled",
+                "enableSoftDelete": false,
+                "softDeleteRetentionInDays": 90
+            }
+        },
+        {
+            "type": "Microsoft.KeyVault/vaults/secrets",
+            "apiVersion": "2021-11-01-preview",
+            "location": "[resourceGroup().location]",
+            "dependsOn": [
+                "[resourceId('Microsoft.KeyVault/vaults', variables('vaultVar'))]"
+            ],
+            "name": "[format('{0}/{1}', variables('vaultVar'), variables('secretNameValueMapVar')[copyIndex('secretNameValueMapIterator')].secretName)]",
+            "properties": {
+                "value": "[variables('secretNameValueMapVar')[copyIndex('secretNameValueMapIterator')].secretValue]",
+                "attributes": {
+                    "enabled": true
+                }
+            },
+            "copy": {
+                "name": "secretNameValueMapIterator",
+                "count": "[length(variables('secretNameValueMapVar'))]",
+                "mode": "parallel"
+            }
+        },
+		{
+			"apiVersion": "2019-02-01",
+            "type": "Microsoft.Network/networkSecurityGroups",
+            "name": "[parameters('networkSecurityGroupName')]",
+            "location": "[resourceGroup().location]",
+            "properties": {
+                "securityRules": [{
+                        "name": "ssl_port",
+                        "properties": {
+                            "description": "Allow inbound 443 port",
+                            "protocol": "Tcp",
+                            "sourcePortRange": "*",
+                            "destinationPortRange": "443",
+                            "sourceAddressPrefix": "*",
+                            "destinationAddressPrefix": "*",
+                            "access": "Allow",
+                            "priority": 123,
+                            "direction": "Inbound"
+                        }
+                    },
+                    {
+                        "name": "kafka_port",
+                        "properties": {
+                            "description": "Allow inbound 9400 port",
+                            "protocol": "Tcp",
+                            "sourcePortRange": "*",
+                            "destinationPortRange": "9400",
+                            "sourceAddressPrefix": "*",
+                            "destinationAddressPrefix": "*",
+                            "access": "Allow",
+                            "priority": 150,
+                            "direction": "Inbound"
+                        }
+                    }
+                ]
+            }
+		},
+        {
+            "type": "Microsoft.Network/virtualNetworks",
+            "apiVersion": "2020-05-01",
+            "name": "[variables('vnetNameVar')]",
+            "location": "[resourceGroup().location]",
+			"dependsOn": [
+                "[resourceId('Microsoft.Network/networkSecurityGroups', parameters('networkSecurityGroupName'))]"
+            ],
+            "properties": {
+                "addressSpace": {
+                    "addressPrefixes": [
+                        "10.24.0.0/22"
+                    ]
+                },
+                "subnets": [
+                    {
+                        "name": "default",
+                        "properties": {
+                            "addressPrefix": "10.24.0.0/24",
+                            "delegations": [],
+                            "privateEndpointNetworkPolicies": "Enabled",
+                            "privateLinkServiceNetworkPolicies": "Enabled"
+                        }
+                    },
+                    {
+                        "name": "hdinsight",
+                        "properties": {
+                            "addressPrefix": "10.24.1.0/24",
+                            "networkSecurityGroup": {
+                                "id": "[resourceId('Microsoft.Network/networkSecurityGroups', parameters('networkSecurityGroupName'))]"
+                            },
+                            "serviceEndpoints": [],
+                            "delegations": [],
+                            "privateEndpointNetworkPolicies": "Enabled",
+                            "privateLinkServiceNetworkPolicies": "Enabled"
+                        }
+                    }
+                ],
+                "virtualNetworkPeerings": [],
+                "enableDdosProtection": false,
+                "enableVmProtection": false
+            }
+        },
+        {
+            "type": "Microsoft.Network/virtualNetworks/subnets",
+            "apiVersion": "2020-05-01",
+            "name": "[concat(variables('vnetNameVar'), '/default')]",
+            "dependsOn": [
+                "[resourceId('Microsoft.Network/virtualNetworks', variables('vnetNameVar'))]"
+            ],
+            "properties": {
+                "addressPrefix": "10.24.0.0/24",
+                "delegations": [],
+                "privateEndpointNetworkPolicies": "Enabled",
+                "privateLinkServiceNetworkPolicies": "Enabled"
+            }
+        },
+        {
+            "type": "Microsoft.Network/virtualNetworks/subnets",
+            "apiVersion": "2020-05-01",
+            "name": "[concat(variables('vnetNameVar'), '/hdinsight')]",
+            "dependsOn": [
+                "[resourceId('Microsoft.Network/virtualNetworks', variables('vnetNameVar'))]"
+            ],
+            "properties": {
+                "addressPrefix": "10.24.1.0/24",
+                "networkSecurityGroup": {
+                    "id": "[resourceId('Microsoft.Network/networkSecurityGroups', parameters('networkSecurityGroupName'))]"
+                },
+                "serviceEndpoints": [],
+                "delegations": [],
+                "privateEndpointNetworkPolicies": "Enabled",
+                "privateLinkServiceNetworkPolicies": "Enabled"
+            }
+        },
+        {
+            "name": "[variables('ambariSQLDatabaseVar')]",
+            "apiVersion": "2017-05-10",
+            "type": "Microsoft.Resources/deployments",
+            "resourceGroup": "[resourceGroup().name]",
+            "properties": {
+                "mode": "Incremental",
+                "template": {
+                    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+                    "contentVersion": "1.0.0.0",
+                    "resources": [
+                        {
+                            "type": "Microsoft.Sql/servers",
+                            "apiVersion": "2022-05-01-preview",
+                            "name": "[variables('ambariSQLServerVar')]",
+                            "location": "[resourceGroup().location]",
+                            "properties": {
+                                "administratorLogin": "[parameters('ambariUserName')]",
+                                "administratorLoginPassword": "[parameters('ambariPassword')]"
+                            }
+                        },
+                        {
+                            "type": "Microsoft.Sql/servers/databases",
+                            "apiVersion": "2020-08-01-preview",
+                            "name": "[format('{0}/{1}', variables('ambariSQLServerVar'), variables('ambariSQLDatabaseVar'))]",
+                            "location": "[resourceGroup().location]",
+                            "dependsOn": [
+                                "[resourceId('Microsoft.Sql/servers', variables('ambariSQLServerVar'))]"
+                            ],
+                            "sku": {
+                                "name": "Standard",
+                                "tier": "Standard",
+                                "capacity": 200
+                            },
+                            "kind": "v12.0,user",
+                            "properties": {
+                                "collation": "SQL_Latin1_General_CP1_CI_AS",
+                                "maxSizeBytes": 268435456000,
+                                "catalogCollation": "SQL_Latin1_General_CP1_CI_AS",
+                                "zoneRedundant": false,
+                                "readScale": "Disabled",
+                                "storageAccountType": "LRS"
+                            }
+                        }
+                    ]
+                }
+            }
+        },
+        {
+            "name": "[parameters('storageAccountName')]",
+            "type": "Microsoft.Storage/storageAccounts",
+            "apiVersion": "2022-05-01",
+            "location": "[resourceGroup().location]",
+            "properties": {
+                "accessTier": "Hot",
+                "minimumTlsVersion": "TLS1_0",
+                "supportsHttpsTrafficOnly": false,
+                "publicNetworkAccess": "Enabled",
+                "allowBlobPublicAccess": false,
+                "allowSharedKeyAccess": true,
+                "allowCrossTenantReplication": true,
+                "defaultToOAuthAuthentication": false,
+                "networkAcls": {
+                    "bypass": "AzureServices",
+                    "defaultAction": "Allow",
+                    "ipRules": []
+                },
+                "dnsEndpointType": "Standard",
+                "encryption": {
+                    "keySource": "Microsoft.Storage",
+                    "services": {
+                        "blob": {
+                            "enabled": true
+                        },
+                        "file": {
+                            "enabled": true
+                        },
+                        "table": {
+                            "enabled": true
+                        },
+                        "queue": {
+                            "enabled": true
+                        }
+                    },
+                    "requireInfrastructureEncryption": false
+                }
+            },
+            "dependsOn": [],
+            "sku": {
+                "name": "Standard_LRS"
+            },
+            "kind": "StorageV2"
+        },
+        {
+            "name": "[concat(parameters('storageAccountName'), '/default')]",
+            "type": "Microsoft.Storage/storageAccounts/blobServices",
+            "apiVersion": "2022-05-01",
+            "properties": {
+                "restorePolicy": {
+                    "enabled": false
+                },
+                "deleteRetentionPolicy": {
+                    "enabled": false,
+                    "days": 7
+                },
+                "containerDeleteRetentionPolicy": {
+                    "enabled": false,
+                    "days": 7
+                },
+                "changeFeed": {
+                    "enabled": false
+                },
+                "isVersioningEnabled": false
+            },
+            "dependsOn": [
+                "[concat('Microsoft.Storage/storageAccounts/', parameters('storageAccountName'))]"
+            ]
+        },
+        {
+            "name": "[concat(parameters('storageAccountName'), '/default')]",
+            "type": "Microsoft.Storage/storageAccounts/fileservices",
+            "apiVersion": "2022-05-01",
+            "properties": {
+                "shareDeleteRetentionPolicy": {
+                    "enabled": false,
+                    "days": 7
+                }
+            },
+            "dependsOn": [
+                "[concat('Microsoft.Storage/storageAccounts/', parameters('storageAccountName'))]",
+                "[concat(concat('Microsoft.Storage/storageAccounts/', parameters('storageAccountName')), '/blobServices/default')]"
+            ]
+        },
+        {
+            "type": "Microsoft.Storage/storageAccounts/blobServices/containers",
+            "apiVersion": "2021-09-01",
+            "name": "[format('{0}/default/{1}',parameters('storageAccountName'), parameters('containerName'))]",
+            "dependsOn": [
+                "[resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName'))]",
+                "[resourceId('Microsoft.Storage/storageAccounts/blobServices', parameters('storageAccountName'), 'default')]"
+            ],
+            "properties": {
+                "immutableStorageWithVersioning": {
+                    "enabled": false
+                },
+                "denyEncryptionScopeOverride": false,
+                "defaultEncryptionScope": "$account-encryption-key",
+                "publicAccess": "None"
+            }
+        },
+        {
+            "apiVersion": "2018-06-01-preview",
+            "name": "[variables('clusterNameVar')]",
+            "type": "Microsoft.HDInsight/clusters",
+            "location": "[resourceGroup().location]",
+            "dependsOn": [
+                "[resourceId('Microsoft.Network/virtualNetworks', variables('vnetNameVar'))]",
+                "[resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName'))]",
+                "[resourceId('Microsoft.Resources/deployments', variables('ambariSQLDatabaseVar'))]"
+            ],
+            "properties": {
+                "clusterVersion": "[parameters('clusterVersion')]",
+                "osType": "Linux",
+                "tier": "standard",
+                "clusterDefinition": {
+                    "kind": "[parameters('clusterKind')]",
+                    "componentVersion": {
+                        "Spark": "2.4"
+                    },
+                    "configurations": {
+                        "gateway": {
+                            "restAuthCredential.isEnabled": true,
+                            "restAuthCredential.username": "[parameters('clusterLoginUserName')]",
+                            "restAuthCredential.password": "[parameters('clusterLoginPassword')]"
+                        },
+                        "ambari-conf": {
+                            "database-server": "[format('{0}.database.windows.net', variables('ambariSQLServerVar'))]",
+                            "database-name": "[variables('ambariSQLDatabaseVar')]",
+                            "database-user-name": "[parameters('ambariUserName')]",
+                            "database-user-password": "[parameters('ambariPassword')]"
+                        }
+                    }
+                },
+                "storageProfile": {
+                    "storageaccounts": [
+                        {
+                            "name": "[format('{0}.blob.core.windows.net',parameters('storageAccountName'))]",
+                            "isDefault": true,
+                            "container": "[parameters('containerName')]",
+                            "key": "[listKeys(resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName')  ), '2019-06-01').keys[0].value]"
+                        }
+                    ]
+                },
+                "computeProfile": {
+                    "roles": [
+                        {
+                            "autoscale": null,
+                            "name": "headnode",
+                            "minInstanceCount": 1,
+                            "targetInstanceCount": 1,
+                            "hardwareProfile": {
+                                "vmSize": "Standard_A1_v2"
+                            },
+                            "osProfile": {
+                                "linuxOperatingSystemProfile": {
+                                    "username": "[parameters('sshUserName')]",
+                                    "password": "[parameters('sshPassword')]"
+                                },
+                                "windowsOperatingSystemProfile": null
+                            },
+                            "virtualNetworkProfile": {
+                                "id": "[resourceId('Microsoft.Network/virtualNetworks', variables('vnetNameVar'))]",
+                                "subnet": "[format('{0}/subnets/hdinsight', resourceId('Microsoft.Network/virtualNetworks', variables('vnetNameVar')))]"
+                            },
+                            "scriptActions": [],
+                            "dataDisksGroups": null
+                        },
+                        {
+                            "autoscale": null,
+                            "name": "workernode",
+                            "targetInstanceCount": "[parameters('clusterWorkerNodeCount')]",
+                            "hardwareProfile": {
+                                "vmSize": "Standard_A1_v2"
+                            },
+                            "osProfile": {
+                                "linuxOperatingSystemProfile": {
+                                    "username": "[parameters('sshUserName')]",
+                                    "password": "[parameters('sshPassword')]"
+                                },
+                                "windowsOperatingSystemProfile": null
+                            },
+                            "virtualNetworkProfile": {
+                                "id": "[resourceId('Microsoft.Network/virtualNetworks', variables('vnetNameVar'))]",
+                                "subnet": "[format('{0}/subnets/hdinsight', resourceId('Microsoft.Network/virtualNetworks', variables('vnetNameVar')))]"
+                            },
+                            "scriptActions": [],
+                            "dataDisksGroups": null
+                        }
+                    ]
+                },
+                "minSupportedTlsVersion": "[parameters('minTlsVersionNumber')]"
+            }
+        }
+    ]
+}
